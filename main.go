@@ -46,14 +46,14 @@ func main() {
 	flag.StringVar(
 		&params.BrokerAddr,
 		"brAddr",
-		":8060",
+		":8081",
 		"Specify ip address of broker",
 	)
 
 	flag.StringVar(
 		&params.RPCPort,
 		"pAddr",
-		"8061",
+		"8082",
 		"Port to listen for rpc",
 	)
 

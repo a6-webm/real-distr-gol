@@ -143,9 +143,9 @@ func (w *Worker) Layoff(req stubs.BrReq, res *stubs.BrRes) error {
 }
 
 func main() {
-	pAddr := flag.String("port", "8050", "Port to listen on")
+	pAddr := flag.String("port", "8083", "Port to listen on")
 	numTh := flag.Int("threads", 1, "Number of goroutines worker should use")
-	brokerAddr := flag.String("broker", "127.0.0.1:8030", "Address of broker instance")
+	brokerAddr := flag.String("broker", ":8081", "Address of broker instance")
 	flag.Parse()
 
 	numThreads = *numTh
