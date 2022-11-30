@@ -43,6 +43,20 @@ func main() {
 		false,
 		"Disables the SDL window, so there is no visualisation during the tests.")
 
+	flag.StringVar(
+		&params.BrokerAddr,
+		"brAddr",
+		":8060",
+		"Specify ip address of broker",
+	)
+
+	flag.StringVar(
+		&params.RPCPort,
+		"pAddr",
+		"8061",
+		"Port to listen for rpc",
+	)
+
 	flag.Parse()
 
 	fmt.Println("Threads:", params.Threads)
