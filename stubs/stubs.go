@@ -16,8 +16,15 @@ var WkPause = "Worker.Pause"
 var WkResume = "Worker.Resume"
 var WkHalt = "Worker.Halt"
 
+type Job struct {
+	GlobalStart int
+	GlobalEnd   int
+	Section     [][]bool
+}
+
 type DisReq struct {
-	Space [][]bool
+	Space   [][]bool
+	NumJobs int
 }
 
 type DisRes struct {

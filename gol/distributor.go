@@ -126,11 +126,12 @@ func mainLoop(p Params, c distributorChannels, broker *rpc.Client, initialSpace 
 }
 
 type Distributor struct {
-	c distributorChannels
+	c distributorChannels // TODO if this doesn't work, try passing c to Broker.Process in the req
 }
 
-func (d *Distributor) TurnCompleted(req stubs.BrReq, res *stubs.BrRes) {
+func (d *Distributor) TurnCompleted(req stubs.BrReq, res *stubs.BrRes) error {
 	d.c.events <- TurnComplete{CompletedTurns: req.Turn + 1}
+	return nil
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
