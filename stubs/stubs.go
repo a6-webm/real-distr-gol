@@ -15,6 +15,7 @@ var WkGOL = "Worker.Process"
 var WkPause = "Worker.Pause"
 var WkResume = "Worker.Resume"
 var WkHalt = "Worker.Halt"
+var WkDone = "Worker.Layoff"
 
 type Job struct {
 	GlobalStart int
@@ -22,9 +23,16 @@ type Job struct {
 	Section     [][]bool
 }
 
+type Result struct {
+	GlobalStart int
+	GlobalEnd   int
+	Section     [][]bool
+}
+
 type DisReq struct {
-	Space   [][]bool
-	NumJobs int
+	Space    [][]bool
+	NumJobs  int
+	ForTurns int
 }
 
 type DisRes struct {
@@ -41,6 +49,10 @@ type WkRes struct{}
 
 type BrReq struct {
 	Turn int
+	Jb   Job
+	Ip   string
 }
 
-type BrRes struct{}
+type BrRes struct {
+	Done Result
+}
