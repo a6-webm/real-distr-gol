@@ -6,11 +6,15 @@ import (
 	"net"
 	"net/rpc"
 	"sync"
+	"time"
 
 	"uk.ac.bris.cs/gameoflife/stubs"
 )
 
 type Broker struct{}
+
+var distributor *rpc.Client
+var distmx sync.RWMutex
 
 var runningWorkers int
 var runQmx sync.RWMutex
@@ -180,7 +184,7 @@ func processLoop(req stubs.DisReq, res *stubs.DisRes) {
 	}
 }
 
-func (b *Broker) Process(req stubs.DisReq, res *stubs.DisRes) error { // TODO come back and analyse race conditions
+func (b *Broker) Process(req stubs.DisReq, res *stubs.DisRes) error {
 	fmt.Println("BROKER:: Process started")
 	nextSpacemx.Lock()
 	spacemx.Lock()
@@ -188,17 +192,42 @@ func (b *Broker) Process(req stubs.DisReq, res *stubs.DisRes) error { // TODO co
 	resetNextSpace()
 	spacemx.Unlock()
 	nextSpacemx.Unlock()
+	ress := new(stubs.BrRes)
+	turnmx.RLock()
+	if turn >= req.ForTurns {
+		fmt.Println("BROKER:: Last turn reached")
+		spacemx.RLock()
+		res.Space = space
+		res.Turn = turn
+		spacemx.RUnlock()
+		turnmx.RUnlock()
+		return nil
+	}
+	turnmx.RUnlock()
 	for { // Turn loop
-		turnmx.RLock()
+		processLoop(req, res)
+
+		turnmx.Lock()
 		if turn >= req.ForTurns {
 			fmt.Println("BROKER:: Last turn reached")
-			turnmx.RUnlock()
+			turnmx.Unlock()
 			break
 		}
-		turnmx.RUnlock()
+		turn++
+		temp := turn
+		turnmx.Unlock()
 
-		processLoop(req, res)
+		distmx.RLock()
+		distributor.Call(stubs.DiTurn, stubs.BrReq{Turn: temp, C: req.C}, ress)
+		distmx.RUnlock()
 	}
+
+	spacemx.RLock()
+	turnmx.RLock()
+	res.Space = space
+	res.Turn = turn
+	spacemx.RUnlock()
+	turnmx.RUnlock()
 
 	return nil
 }
@@ -218,6 +247,26 @@ func callAllWorkers(serviceMethod string) {
 		}
 	}
 	wCmx.Unlock()
+}
+
+func (b *Broker) SetDistributor(req stubs.DisReq, res *stubs.DisRes) error {
+	var err error
+	distmx.Lock()
+	if distributor != nil {
+		distributor.Close()
+	}
+	for {
+		distributor, err = rpc.Dial("tcp", req.Ip)
+		if err != nil {
+			fmt.Println("BROKER::! Error connecting to distributor, retrying in 1 second")
+			time.Sleep(1 * time.Second)
+		} else {
+			fmt.Println("BROKER:: Connected to distributor")
+			break
+		}
+	}
+	distmx.Unlock()
+	return nil
 }
 
 func (b *Broker) Pause(req stubs.DisReq, res *stubs.DisRes) error {
@@ -243,19 +292,22 @@ func (b *Broker) Halt(req stubs.DisReq, res *stubs.DisRes) error {
 
 func (b *Broker) GetNumAlive(req stubs.DisReq, res *stubs.DisRes) error {
 	fmt.Println("DIST:: GetNumAlive")
+	turnmx.RLock()
 	spacemx.RLock()
 	res.IntRes = countAlive(space)
+	res.Turn = turn
 	spacemx.RUnlock()
+	turnmx.RUnlock()
 	return nil
 }
 
 func (b *Broker) GetState(req stubs.DisReq, res *stubs.DisRes) error {
 	fmt.Println("DIST:: GetState")
 	spacemx.RLock()
-	res.Space = space
-	spacemx.RUnlock()
 	turnmx.RLock()
+	res.Space = space
 	res.Turn = turn
+	spacemx.RUnlock()
 	turnmx.RUnlock()
 	return nil
 }

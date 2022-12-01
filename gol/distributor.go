@@ -20,6 +20,13 @@ type distributorChannels struct {
 	keyPresses <-chan rune
 }
 
+func getOutboundIP() string {
+	conn, _ := net.Dial("udp", "8.8.8.8:80")
+	defer conn.Close()
+	localAddr := conn.LocalAddr().(*net.UDPAddr).IP.String()
+	return localAddr
+}
+
 func loadImage(p Params, c distributorChannels) [][]bool {
 	c.ioCommand <- ioInput
 	c.ioFilename <- fmt.Sprint(p.ImageWidth, "x", p.ImageHeight)
@@ -72,8 +79,9 @@ func mainLoop(p Params, c distributorChannels, broker *rpc.Client, initialSpace 
 	defer ticker.Stop()
 	res := new(stubs.DisRes)
 	paused := false
-	var finalTurnCh chan *rpc.Call
+	var finalTurnCh chan *rpc.Call = make(chan *rpc.Call, 1)
 	broker.Go(stubs.BrGOL, stubs.DisReq{Space: initialSpace, NumJobs: p.Threads, ForTurns: p.Turns}, res, finalTurnCh)
+	fmt.Println("DIST:: Starting main loop")
 	for {
 		select {
 		case key := <-c.keyPresses:
@@ -116,10 +124,11 @@ func mainLoop(p Params, c distributorChannels, broker *rpc.Client, initialSpace 
 				CompletedTurns: res.Turn,
 				CellsCount:     res.IntRes,
 			}
-		case <-finalTurnCh:
-			broker.Call(stubs.BrGetState, stubs.DisReq{}, res)
+		case call := <-finalTurnCh:
+			res := call.Reply.(*stubs.DisRes)
 			sendStateToOutput(p, c, res.Space, res.Turn)
-			c.events <- FinalTurnComplete{CompletedTurns: p.Turns, Alive: toListOfAlive(res.Space)}
+			c.events <- FinalTurnComplete{CompletedTurns: res.Turn, Alive: toListOfAlive(res.Space)}
+			fmt.Println("DIST:: final turn reached")
 			return
 		}
 	}
@@ -130,7 +139,8 @@ type Distributor struct {
 }
 
 func (d *Distributor) TurnCompleted(req stubs.BrReq, res *stubs.BrRes) error {
-	d.c.events <- TurnComplete{CompletedTurns: req.Turn + 1}
+	fmt.Println("BROKER:: Turn", req.Turn, "complete")
+	d.c.events <- TurnComplete{CompletedTurns: req.Turn}
 	return nil
 }
 
@@ -152,6 +162,8 @@ func distributor(p Params, c distributorChannels) {
 	defer listener.Close()
 	rpc.Register(&Distributor{c: c})
 	go rpc.Accept(listener)
+	res := new(stubs.DisRes)
+	broker.Call(stubs.BrSetDist, stubs.DisReq{Ip: getOutboundIP() + ":" + p.RPCPort}, res)
 	fmt.Println("DIST:: Setup complete")
 
 	turn := 0
@@ -170,6 +182,8 @@ func distributor(p Params, c distributorChannels) {
 
 	mainLoop(p, c, broker, space)
 
+	fmt.Println("DIST:: exited mainLoop()")
+
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
@@ -178,4 +192,5 @@ func distributor(p Params, c distributorChannels) {
 
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
 	close(c.events)
+	fmt.Println("DIST:: exited main")
 }

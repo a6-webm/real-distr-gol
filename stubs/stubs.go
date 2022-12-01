@@ -9,6 +9,7 @@ var BrHalt = "Broker.Halt"
 var BrNumAlive = "Broker.GetNumAlive"
 var BrGetState = "Broker.GetState"
 var BrGetTurn = "Broker.GetTurn"
+var BrSetDist = "Broker.SetDistributor"
 
 var BrEmploy = "Broker.Employ"
 var WkGOL = "Worker.Process"
@@ -33,6 +34,8 @@ type DisReq struct {
 	Space    [][]bool
 	NumJobs  int
 	ForTurns int
+	Ip       string
+	C        any
 }
 
 type DisRes struct {
@@ -51,6 +54,7 @@ type BrReq struct {
 	Turn int
 	Jb   Job
 	Ip   string
+	C    any
 }
 
 type BrRes struct {
