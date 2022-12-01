@@ -12,6 +12,9 @@ import (
 
 type Broker struct{}
 
+var runningWorkers int
+var runQmx sync.RWMutex
+
 var jobQueue []stubs.Job
 var jobQmx sync.RWMutex
 
@@ -70,6 +73,8 @@ func jobsFromSpace(space [][]bool, numJobs int) []stubs.Job {
 	job := stubs.Job{Section: space[y:]} // Create final job
 	job.Section = append(job.Section, space[0])
 	job.Section = append([][]bool{space[(y-1+height)%height]}, job.Section...) // Add previous row for overlapping
+	job.GlobalStart = y
+	job.GlobalEnd = y + split
 	jobs = append(jobs, job)
 	return jobs
 }
@@ -91,71 +96,102 @@ func handleEmployee(ip string) {
 	var worker *rpc.Client
 	wCmx.Lock()
 	if rpcC, ok := workerClients[ip]; ok {
+		fmt.Println("BROKER:: rpcClient for", ip, "already stored")
 		worker = rpcC
 	} else {
+		fmt.Println("BROKER:: rpcClient for", ip, "unknown, dialing...")
 		worker, err = rpc.Dial("tcp", ip)
 		if err != nil {
 			wCmx.Unlock()
+			fmt.Println("BROKER::! Couldn't dial", ip)
 			return
 		}
 		workerClients[ip] = worker
 	}
 	wCmx.Unlock()
+	fmt.Println("BROKER:: Retrieved rpcClient")
 
+	res := new(stubs.BrRes)
+	jobQmx.RLock()
+	if len(jobQueue) == 0 {
+		jobQmx.RUnlock()
+		fmt.Println("BROKER:: no work for employee, handle closed")
+		worker.Call(stubs.WkDone, stubs.BrReq{}, res)
+		return
+	}
+	jobQmx.RUnlock()
+	runQmx.Lock()
 	jobQmx.Lock()
 	job := jobQueue[len(jobQueue)-1]
 	jobQueue = jobQueue[:len(jobQueue)-1]
+	runningWorkers++
 	jobQmx.Unlock()
+	runQmx.Unlock()
+	fmt.Println("BROKER:: Selected job [", job.GlobalStart, ",", job.GlobalEnd, "]")
 
-	res := new(stubs.BrRes)
 	err = worker.Call(stubs.WkGOL, stubs.BrReq{Jb: job}, res)
 	if err != nil {
+		fmt.Println("BROKER::! Worker errored '", err, "', removing worker and adding job back to queue")
+		runQmx.Lock()
 		jobQmx.Lock()
+		wCmx.Lock()
+		delete(workerClients, ip)
 		jobQueue = append([]stubs.Job{job}, jobQueue...)
+		runningWorkers--
+		wCmx.Unlock()
 		jobQmx.Unlock()
+		runQmx.Unlock()
 		return
 	}
 	nextSpacemx.Lock()
 	nextSpace = replaceSection(nextSpace, res.Done)
 	nextSpacemx.Unlock()
 	worker.Call(stubs.WkDone, stubs.BrReq{}, res)
+	runQmx.Lock()
+	runningWorkers--
+	runQmx.Unlock()
+	fmt.Println("BROKER:: handleEmployee() closed")
 }
 
 func processLoop(req stubs.DisReq, res *stubs.DisRes) {
+	jobQueue = jobsFromSpace(space, req.NumJobs)
 	for {
-		jobQueue = jobsFromSpace(space, req.NumJobs)
-		for {
-			select {
-			case <-pauseCh:
-				<-resumeCh
-			case <-haltCh:
-				fmt.Println("shoulda halted ig")
-			case ip := <-employeeQueue:
-				go handleEmployee(ip)
-			}
-			if len(jobQueue) == 0 {
-				nextSpacemx.Lock()
-				spacemx.Lock()
-				space = nextSpace
-				resetNextSpace()
-				spacemx.Unlock()
-				nextSpacemx.Unlock()
-				return
-			}
+		select {
+		case <-pauseCh:
+			fmt.Println("BROKER:: Paused")
+			<-resumeCh
+			fmt.Println("BROKER:: Resumed")
+		case <-haltCh:
+			fmt.Println("shoulda halted ig")
+		case ip := <-employeeQueue:
+			fmt.Println("BROKER:: Employing", ip)
+			go handleEmployee(ip)
+		}
+		if len(jobQueue) == 0 && runningWorkers == 0 {
+			fmt.Println("BROKER:: jobQueue empty, turn ended")
+			nextSpacemx.Lock()
+			spacemx.Lock()
+			space = nextSpace
+			resetNextSpace()
+			spacemx.Unlock()
+			nextSpacemx.Unlock()
+			return
 		}
 	}
 }
 
 func (b *Broker) Process(req stubs.DisReq, res *stubs.DisRes) error { // TODO come back and analyse race conditions
+	fmt.Println("BROKER:: Process started")
 	nextSpacemx.Lock()
 	spacemx.Lock()
 	space = req.Space
 	resetNextSpace()
 	spacemx.Unlock()
 	nextSpacemx.Unlock()
-	for {
+	for { // Turn loop
 		turnmx.RLock()
 		if turn >= req.ForTurns {
+			fmt.Println("BROKER:: Last turn reached")
 			turnmx.RUnlock()
 			break
 		}
@@ -170,13 +206,14 @@ func (b *Broker) Process(req stubs.DisReq, res *stubs.DisRes) error { // TODO co
 func callAllWorkers(serviceMethod string) {
 	wCmx.Lock()
 	done := make(chan *rpc.Call, len(workerClients))
-	var brRes stubs.BrRes
+	brRes := new(stubs.BrRes)
 	for ip, rpcC := range workerClients {
 		rpcC.Go(serviceMethod, stubs.BrReq{Ip: ip}, brRes, done)
 	}
 	for i := 0; i < len(workerClients); i++ {
 		d := <-done
 		if d.Error != nil {
+			fmt.Print("BROKER::! Worker", d.Args.(stubs.BrReq).Ip, "no longer responsive, removing from list")
 			delete(workerClients, d.Args.(stubs.BrReq).Ip)
 		}
 	}
@@ -184,24 +221,28 @@ func callAllWorkers(serviceMethod string) {
 }
 
 func (b *Broker) Pause(req stubs.DisReq, res *stubs.DisRes) error {
+	fmt.Println("DIST:: Pause signal")
 	pauseCh <- true
 	callAllWorkers(stubs.WkPause)
 	return nil
 }
 
 func (b *Broker) Resume(req stubs.DisReq, res *stubs.DisRes) error {
+	fmt.Println("DIST:: Resume signal")
 	resumeCh <- true
 	callAllWorkers(stubs.WkResume)
 	return nil
 }
 
 func (b *Broker) Halt(req stubs.DisReq, res *stubs.DisRes) error {
+	fmt.Println("DIST:: Halt signal")
 	haltCh <- true
 	callAllWorkers(stubs.WkHalt)
 	return nil
 }
 
 func (b *Broker) GetNumAlive(req stubs.DisReq, res *stubs.DisRes) error {
+	fmt.Println("DIST:: GetNumAlive")
 	spacemx.RLock()
 	res.IntRes = countAlive(space)
 	spacemx.RUnlock()
@@ -209,6 +250,7 @@ func (b *Broker) GetNumAlive(req stubs.DisReq, res *stubs.DisRes) error {
 }
 
 func (b *Broker) GetState(req stubs.DisReq, res *stubs.DisRes) error {
+	fmt.Println("DIST:: GetState")
 	spacemx.RLock()
 	res.Space = space
 	spacemx.RUnlock()
@@ -219,6 +261,7 @@ func (b *Broker) GetState(req stubs.DisReq, res *stubs.DisRes) error {
 }
 
 func (b *Broker) GetTurn(req stubs.DisReq, res *stubs.DisRes) error {
+	fmt.Println("DIST:: GetTurn")
 	turnmx.RLock()
 	res.Turn = turn
 	turnmx.RUnlock()
@@ -226,15 +269,23 @@ func (b *Broker) GetTurn(req stubs.DisReq, res *stubs.DisRes) error {
 }
 
 func (b *Broker) Employ(req stubs.WkReq, res *stubs.WkRes) error {
+	fmt.Println(req.Ip, ":: Employ request")
 	employeeQueue <- req.Ip
 	return nil
 }
 
 func main() {
 	pAddr := flag.String("port", "8081", "Port to listen on")
+	bufsize := flag.Int("bufsize", 64, "Size of message buffers, set to at least the number of threads in use")
 	flag.Parse()
+	workerClients = make(map[string]*rpc.Client)
+	employeeQueue = make(chan string, *bufsize)
+	haltCh = make(chan bool, *bufsize)
+	pauseCh = make(chan bool, *bufsize)
+	resumeCh = make(chan bool, *bufsize)
 	rpc.Register(&Broker{})
 	listener, _ := net.Listen("tcp", ":"+*pAddr)
 	defer listener.Close()
+	fmt.Println("BROKER:: Setup complete")
 	rpc.Accept(listener)
 }

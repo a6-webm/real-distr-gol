@@ -82,6 +82,7 @@ func gameOfLife(sec [][]bool) [][]bool {
 				return nil
 			}
 		}
+		fmt.Println("WORKER:: Processed row", y)
 	}
 	return newSec
 }
@@ -103,6 +104,7 @@ func possiblePauseMayExit() bool {
 type Worker struct{}
 
 func (w *Worker) Process(req stubs.BrReq, res *stubs.BrRes) error {
+	fmt.Println("WORKER:: Process started")
 	sec := gameOfLife(req.Jb.Section)
 	if sec == nil {
 		return nil
@@ -112,10 +114,12 @@ func (w *Worker) Process(req stubs.BrReq, res *stubs.BrRes) error {
 		GlobalEnd:   req.Jb.GlobalEnd,
 		Section:     sec,
 	}
+	fmt.Println("WORKER:: Process finished")
 	return nil
 }
 
 func (w *Worker) Pause(req stubs.BrReq, res *stubs.BrRes) error {
+	fmt.Println("BROKER:: Pause signal sent")
 	for i := 0; i < numThreads; i++ {
 		pauseCh <- true
 	}
@@ -123,6 +127,7 @@ func (w *Worker) Pause(req stubs.BrReq, res *stubs.BrRes) error {
 }
 
 func (w *Worker) Resume(req stubs.BrReq, res *stubs.BrRes) error {
+	fmt.Println("BROKER:: Resume signal sent")
 	for i := 0; i < numThreads; i++ {
 		resumeCh <- true
 	}
@@ -130,20 +135,22 @@ func (w *Worker) Resume(req stubs.BrReq, res *stubs.BrRes) error {
 }
 
 func (w *Worker) Halt(req stubs.BrReq, res *stubs.BrRes) error {
-	for i := 0; i < numThreads+1; i++ {
+	fmt.Println("BROKER:: Halt signal sent")
+	for i := 0; i < numThreads+2; i++ {
 		haltCh <- true
 	}
 	return nil
 }
 
 func (w *Worker) Layoff(req stubs.BrReq, res *stubs.BrRes) error {
-	var ress *stubs.WkRes
+	ress := new(stubs.WkRes)
+	fmt.Println("BROKER:: Request for employment")
 	broker.Go(stubs.BrEmploy, stubs.WkReq{Ip: ip}, ress, nil)
 	return nil
 }
 
 func main() {
-	pAddr := flag.String("port", "8083", "Port to listen on")
+	pAddr := flag.String("port", "8040", "Port to listen on")
 	numTh := flag.Int("threads", 1, "Number of goroutines worker should use")
 	brokerAddr := flag.String("broker", ":8081", "Address of broker instance")
 	flag.Parse()
@@ -151,7 +158,7 @@ func main() {
 	numThreads = *numTh
 	pauseCh = make(chan bool, numThreads)
 	resumeCh = make(chan bool, numThreads)
-	haltCh = make(chan bool, numThreads+1)
+	haltCh = make(chan bool, numThreads+2)
 
 	var err error
 	for {
@@ -169,9 +176,10 @@ func main() {
 	defer listener.Close()
 	go rpc.Accept(listener)
 	fmt.Println("WORKER:: Setup complete")
-	ip = getOutboundIP() + *pAddr
-	var res *stubs.WkRes
+	ip = getOutboundIP() + ":" + *pAddr
+	res := new(stubs.WkRes)
 	for i := 0; i < numThreads; i++ {
+		fmt.Println("WORKER:: Request for employment")
 		broker.Go(stubs.BrEmploy, stubs.WkReq{Ip: ip}, res, nil)
 	}
 	<-haltCh

@@ -73,7 +73,7 @@ func mainLoop(p Params, c distributorChannels, broker *rpc.Client, initialSpace 
 	res := new(stubs.DisRes)
 	paused := false
 	var finalTurnCh chan *rpc.Call
-	broker.Go(stubs.BrGOL, stubs.DisReq{Space: initialSpace}, res, finalTurnCh)
+	broker.Go(stubs.BrGOL, stubs.DisReq{Space: initialSpace, NumJobs: p.Threads, ForTurns: p.Turns}, res, finalTurnCh)
 	for {
 		select {
 		case key := <-c.keyPresses:
@@ -144,7 +144,7 @@ func distributor(p Params, c distributorChannels) {
 			fmt.Println("DIST::! Error connecting to broker, retrying in 5 seconds")
 			time.Sleep(5 * time.Second)
 		} else {
-			defer broker.Close()
+			fmt.Println("DIST:: Connected to broker")
 			break
 		}
 	}
@@ -152,6 +152,7 @@ func distributor(p Params, c distributorChannels) {
 	defer listener.Close()
 	rpc.Register(&Distributor{c: c})
 	go rpc.Accept(listener)
+	fmt.Println("DIST:: Setup complete")
 
 	turn := 0
 	space := loadImage(p, c)
