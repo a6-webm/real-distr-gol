@@ -87,12 +87,12 @@ func replaceSection(in [][]bool, with stubs.Result) [][]bool {
 	return append(append(in[:with.GlobalStart], with.Section[1:len(with.Section)-1]...), in[with.GlobalEnd:]...)
 }
 
-func resetNextSpace() {
-	nextSpace = make([][]bool, len(space))
-	for i := 0; i < len(nextSpace); i++ {
-		nextSpace[i] = make([]bool, len(space[0]))
+func makeEmptySpace(h int, w int) [][]bool {
+	out := make([][]bool, h)
+	for i := 0; i < h; i++ {
+		out[i] = make([]bool, w)
 	}
-	nextSpace = make([][]bool, len(space))
+	return out
 }
 
 func handleEmployee(ip string) {
@@ -160,6 +160,16 @@ func handleEmployee(ip string) {
 func processLoop(req stubs.DisReq, res *stubs.DisRes) {
 	jobQueue = jobsFromSpace(space, req.NumJobs)
 	for {
+		if len(jobQueue) == 0 && runningWorkers == 0 {
+			fmt.Println("BROKER:: jobQueue empty, turn ended")
+			nextSpacemx.Lock()
+			spacemx.Lock()
+			space = nextSpace
+			nextSpace = makeEmptySpace(len(space), len(space[0]))
+			spacemx.Unlock()
+			nextSpacemx.Unlock()
+			return
+		}
 		select {
 		case <-pauseCh:
 			fmt.Println("BROKER:: Paused")
@@ -170,16 +180,7 @@ func processLoop(req stubs.DisReq, res *stubs.DisRes) {
 		case ip := <-employeeQueue:
 			fmt.Println("BROKER:: Employing", ip)
 			go handleEmployee(ip)
-		}
-		if len(jobQueue) == 0 && runningWorkers == 0 {
-			fmt.Println("BROKER:: jobQueue empty, turn ended")
-			nextSpacemx.Lock()
-			spacemx.Lock()
-			space = nextSpace
-			resetNextSpace()
-			spacemx.Unlock()
-			nextSpacemx.Unlock()
-			return
+		default:
 		}
 	}
 }
@@ -189,7 +190,7 @@ func (b *Broker) Process(req stubs.DisReq, res *stubs.DisRes) error {
 	nextSpacemx.Lock()
 	spacemx.Lock()
 	space = req.Space
-	resetNextSpace()
+	nextSpace = makeEmptySpace(len(space), len(space[0]))
 	spacemx.Unlock()
 	nextSpacemx.Unlock()
 	ress := new(stubs.BrRes)
@@ -208,12 +209,12 @@ func (b *Broker) Process(req stubs.DisReq, res *stubs.DisRes) error {
 		processLoop(req, res)
 
 		turnmx.Lock()
+		turn++
 		if turn >= req.ForTurns {
 			fmt.Println("BROKER:: Last turn reached")
 			turnmx.Unlock()
 			break
 		}
-		turn++
 		temp := turn
 		turnmx.Unlock()
 

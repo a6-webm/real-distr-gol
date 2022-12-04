@@ -177,9 +177,9 @@ func main() {
 	go rpc.Accept(listener)
 	fmt.Println("WORKER:: Setup complete")
 	ip = getOutboundIP() + ":" + *pAddr
-	res := new(stubs.WkRes)
 	for i := 0; i < numThreads; i++ {
 		fmt.Println("WORKER:: Request for employment")
+		res := new(stubs.WkRes)
 		broker.Go(stubs.BrEmploy, stubs.WkReq{Ip: ip}, res, nil)
 	}
 	<-haltCh

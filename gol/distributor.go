@@ -127,6 +127,8 @@ func mainLoop(p Params, c distributorChannels, broker *rpc.Client, initialSpace 
 		case call := <-finalTurnCh:
 			res := call.Reply.(*stubs.DisRes)
 			sendStateToOutput(p, c, res.Space, res.Turn)
+			c.ioCommand <- ioCheckIdle
+			<-c.ioIdle
 			c.events <- FinalTurnComplete{CompletedTurns: res.Turn, Alive: toListOfAlive(res.Space)}
 			fmt.Println("DIST:: final turn reached")
 			return
